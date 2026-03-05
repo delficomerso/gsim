@@ -195,8 +195,8 @@ def add_metals(
             if surfacetag is None:
                 continue
 
-            if planar_conductors and layer_type == "conductor":
-                # For planar conductors, keep as 2D surface (PEC boundary)
+            if layer_type == "conductor" and (planar_conductors or thickness == 0):
+                # Zero-thickness or explicitly planar → 2D PEC surface
                 metal_tags[layer_name]["surfaces_xy"].append(surfacetag)
             elif thickness > 0:
                 result = kernel.extrude([(2, surfacetag)], 0, 0, thickness)
@@ -225,89 +225,163 @@ def add_dielectrics(
     geometry: GeometryData,
     stack: LayerStack,
     margin: float,
-    air_margin: float,
+    air_margin: float = 0.0,
 ) -> dict:
-    """Add dielectric boxes and airbox to gmsh.
+    """Add dielectric volumes to gmsh.
+
+    All boxes are created at their exact geometric bounds.  Coincident
+    faces and overlapping volumes are resolved later by
+    ``run_boolean_pipeline``, which performs priority-based cuts and
+    conformal fragmentation — no artificial offsets needed.
 
     Args:
         kernel: gmsh OCC kernel
         geometry: Extracted geometry data
         stack: LayerStack with dielectric definitions
         margin: XY margin around design (um)
-        air_margin: Air box margin (um)
+        air_margin: Extra margin for the surrounding airbox (um).
+            When > 0, an enclosing airbox is created.  The boolean
+            pipeline will carve the dielectrics out of it
+            automatically.
 
     Returns:
         Dict with material_name -> list of volume_tags
     """
-    dielectric_tags = {}
+    dielectric_tags: dict[str, list[int]] = {}
 
-    # Get overall geometry bounds
     xmin, ymin, xmax, ymax = geometry.bbox
     xmin -= margin
     ymin -= margin
     xmax += margin
     ymax += margin
 
-    # Track overall z range
     z_min_all = math.inf
     z_max_all = -math.inf
 
-    # Sort dielectrics by z (top to bottom for correct layering)
-    sorted_dielectrics = sorted(
-        stack.dielectrics, key=lambda d: d["zmax"], reverse=True
-    )
-
-    # Add dielectric boxes
-    offset = 0
-    offset_delta = margin / 20
-
-    for dielectric in sorted_dielectrics:
+    for dielectric in stack.dielectrics:
         material = dielectric["material"]
+
+        # When building an explicit airbox, skip the dielectric air layer
+        if material == "air" and air_margin > 0:
+            continue
+
         d_zmin = dielectric["zmin"]
         d_zmax = dielectric["zmax"]
 
         z_min_all = min(z_min_all, d_zmin)
         z_max_all = max(z_max_all, d_zmax)
 
-        if material not in dielectric_tags:
-            dielectric_tags[material] = []
+        dielectric_tags.setdefault(material, [])
 
-        # Create box with slight offset to avoid mesh issues
         box_tag = gmsh_utils.create_box(
             kernel,
-            xmin - offset,
-            ymin - offset,
+            xmin,
+            ymin,
             d_zmin,
-            xmax + offset,
-            ymax + offset,
+            xmax,
+            ymax,
             d_zmax,
         )
         dielectric_tags[material].append(box_tag)
 
-        # Alternate offset to avoid coincident faces
-        offset = offset_delta if offset == 0 else 0
-
-    # Add surrounding airbox
-    air_xmin = xmin - air_margin
-    air_ymin = ymin - air_margin
-    air_xmax = xmax + air_margin
-    air_ymax = ymax + air_margin
-    air_zmin = z_min_all - air_margin
-    air_zmax = z_max_all + air_margin
-
-    airbox_tag = kernel.addBox(
-        air_xmin,
-        air_ymin,
-        air_zmin,
-        air_xmax - air_xmin,
-        air_ymax - air_ymin,
-        air_zmax - air_zmin,
-    )
-    dielectric_tags["airbox"] = [airbox_tag]
+    # Surrounding airbox (boolean pipeline handles the overlap)
+    if air_margin > 0:
+        airbox_tag = gmsh_utils.create_box(
+            kernel,
+            xmin - air_margin,
+            ymin - air_margin,
+            z_min_all - air_margin,
+            xmax + air_margin,
+            ymax + air_margin,
+            z_max_all + air_margin,
+        )
+        dielectric_tags["airbox"] = [airbox_tag]
 
     kernel.synchronize()
 
     return dielectric_tags
+
+
+def build_entities(
+    metal_tags: dict,
+    dielectric_tags: dict,
+    port_tags: dict,
+    port_info: list,
+) -> list[gmsh_utils.Entity]:
+    """Convert geometry tag dicts into Entity objects for the boolean pipeline.
+
+    Mesh-order convention (lower = higher priority, gets cut first):
+        0  - conductor (2D PEC) surfaces
+        1  - port surfaces
+        2  - dielectrics (non-airbox volumes)
+        3  - airbox volume (lowest priority, carved by everything else)
+
+    Args:
+        metal_tags: from ``add_metals()``
+        dielectric_tags: from ``add_dielectrics()``
+        port_tags: from ``add_ports()``
+        port_info: metadata list from ``add_ports()``
+
+    Returns:
+        List of Entity objects ready for ``run_boolean_pipeline()``.
+    """
+    Entity = gmsh_utils.Entity
+    entities: list[gmsh_utils.Entity] = []
+
+    # --- Conductors (dim=2 surfaces, highest priority) ---
+    for layer_name, tag_info in metal_tags.items():
+        # PEC / zero-thickness surfaces
+        if tag_info["surfaces_xy"]:
+            entities.append(
+                Entity(
+                    name=f"{layer_name}_pec",
+                    dim=2,
+                    mesh_order=0,
+                    tags=tag_info["surfaces_xy"],
+                )
+            )
+
+    # --- Port surfaces (dim=2) ---
+    for port_name, surf_tags in port_tags.items():
+        port_num = int(port_name[1:])
+        info = next(
+            (p for p in port_info if p["portnumber"] == port_num),
+            None,
+        )
+        if info and info.get("type") == "cpw":
+            # One entity per CPW element
+            for i, tag in enumerate(surf_tags):
+                entities.append(
+                    Entity(
+                        name=f"{port_name}_E{i}",
+                        dim=2,
+                        mesh_order=1,
+                        tags=[tag],
+                    )
+                )
+        else:
+            entities.append(
+                Entity(
+                    name=port_name,
+                    dim=2,
+                    mesh_order=1,
+                    tags=surf_tags,
+                )
+            )
+
+    # --- Dielectric volumes (dim=3) ---
+    for material, vol_tags in dielectric_tags.items():
+        order = 3 if material == "airbox" else 2
+        entities.append(
+            Entity(
+                name=material,
+                dim=3,
+                mesh_order=order,
+                tags=vol_tags,
+            )
+        )
+
+    return entities
 
 
 def add_ports(
@@ -484,6 +558,7 @@ __all__ = [
     "add_dielectrics",
     "add_metals",
     "add_ports",
+    "build_entities",
     "extract_geometry",
     "get_layer_info",
 ]

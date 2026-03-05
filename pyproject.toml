@@ -23,8 +23,9 @@ dependencies = [
   "plotly",
   "pydantic>=2.10.6",
   "pyvista>=0.43.0",
+  "qpdk @ git+https://github.com/gdsfactory/quantum-rf-pdk.git@v0.2.1",
   "trame-vtk",
-  "trame-vuetify"
+  "trame-vuetify",
 ]
 
 [dependency-groups]

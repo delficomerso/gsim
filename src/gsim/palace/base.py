@@ -6,7 +6,6 @@ DrivenSim, EigenmodeSim, ElectrostaticSim.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -92,6 +91,7 @@ class PalaceSimMixin:
 
     def set_stack(
         self,
+        stack: LayerStack | None = None,
         *,
         yaml_path: str | Path | None = None,
         air_above: float = 200.0,
@@ -101,19 +101,37 @@ class PalaceSimMixin:
     ) -> None:
         """Configure the layer stack.
 
-        If yaml_path is provided, loads stack from YAML file.
-        Otherwise, extracts from active PDK with given parameters.
+        Three modes of use:
+
+        1. **Active PDK** (default — auto-detects IHP, QPDK, etc.)::
+
+               sim.set_stack(air_above=300.0, substrate_thickness=2.0)
+
+        2. **YAML file**::
+
+               sim.set_stack(yaml_path="custom_stack.yaml")
+
+        3. **Custom stack** (advanced — pass a hand-built LayerStack)::
+
+               sim.set_stack(my_layer_stack)
 
         Args:
-            yaml_path: Path to custom YAML stack file
-            air_above: Air box height above top metal in um
-            substrate_thickness: Thickness below z=0 in um
-            include_substrate: Include lossy silicon substrate
-            **kwargs: Additional args passed to extract_layer_stack
+            stack: Custom gsim LayerStack (bypasses PDK extraction).
+            yaml_path: Path to custom YAML stack file.
+            air_above: Air box height above top metal in um.
+            substrate_thickness: Thickness below z=0 in um.
+            include_substrate: Include lossy silicon substrate.
+            **kwargs: Additional args passed to extract_layer_stack.
 
         Example:
             >>> sim.set_stack(air_above=300.0, substrate_thickness=2.0)
         """
+        if stack is not None:
+            # Directly use a pre-built LayerStack — skip lazy resolution
+            self.stack = stack
+            self._stack_kwargs = {"_prebuilt": True}
+            return
+
         self._stack_kwargs = {
             "yaml_path": yaml_path,
             "air_above": air_above,
@@ -175,7 +193,7 @@ class PalaceSimMixin:
     def set_numerical(
         self,
         *,
-        order: int = 2,
+        order: int = 1,
         tolerance: float = 1e-6,
         max_iterations: int = 400,
         solver_type: Literal["Default", "SuperLU", "STRUMPACK", "MUMPS"] = "Default",
@@ -214,11 +232,18 @@ class PalaceSimMixin:
     # -------------------------------------------------------------------------
 
     def _resolve_stack(self) -> LayerStack:
-        """Resolve the layer stack from PDK or YAML.
+        """Resolve the layer stack from PDK, YAML, or custom object.
 
         Returns:
-            Legacy LayerStack object for mesh generation
+            LayerStack object for mesh generation
         """
+        # If a custom stack was given via set_stack(layer_stack), use it
+        if self.stack is not None and self._stack_kwargs.get("_prebuilt"):
+            # Apply material overrides
+            for name, props in self.materials.items():
+                self.stack.materials[name] = props.to_dict()
+            return self.stack
+
         from gsim.common.stack import get_stack
 
         yaml_path = self._stack_kwargs.pop("yaml_path", None)
@@ -238,11 +263,11 @@ class PalaceSimMixin:
 
     def _build_mesh_config(
         self,
-        preset: Literal["coarse", "default", "fine"] | None,
+        preset: Literal["coarse", "default", "graded", "fine"] | None,
         refined_mesh_size: float | None,
         max_mesh_size: float | None,
         margin: float | None,
-        air_above: float | None,
+        airbox_margin: float | None,
         fmax: float | None,
         planar_conductors: bool | None,
         show_gui: bool,
@@ -253,6 +278,8 @@ class PalaceSimMixin:
         # Build mesh config from preset
         if preset == "coarse":
             mesh_config = MeshConfig.coarse()
+        elif preset == "graded":
+            mesh_config = MeshConfig.graded()
         elif preset == "fine":
             mesh_config = MeshConfig.fine()
         else:
@@ -267,28 +294,6 @@ class PalaceSimMixin:
         else:
             mesh_config.planar_conductors = planar_conductors
 
-        # Track overrides for warning
-        overrides = []
-        if preset is not None:
-            if refined_mesh_size is not None:
-                overrides.append(f"refined_mesh_size={refined_mesh_size}")
-            if max_mesh_size is not None:
-                overrides.append(f"max_mesh_size={max_mesh_size}")
-            if margin is not None:
-                overrides.append(f"margin={margin}")
-            if air_above is not None:
-                overrides.append(f"air_above={air_above}")
-            if fmax is not None:
-                overrides.append(f"fmax={fmax}")
-            if planar_conductors is not None:
-                overrides.append(f"planar_conductors={planar_conductors}")
-
-            if overrides:
-                warnings.warn(
-                    f"Preset '{preset}' values overridden by: {', '.join(overrides)}",
-                    stacklevel=4,
-                )
-
         # Apply overrides
         if refined_mesh_size is not None:
             mesh_config.refined_mesh_size = refined_mesh_size
@@ -296,8 +301,8 @@ class PalaceSimMixin:
             mesh_config.max_mesh_size = max_mesh_size
         if margin is not None:
             mesh_config.margin = margin
-        if air_above is not None:
-            mesh_config.air_above = air_above
+        if airbox_margin is not None:
+            mesh_config.airbox_margin = airbox_margin
         if fmax is not None:
             mesh_config.fmax = fmax
         mesh_config.show_gui = show_gui

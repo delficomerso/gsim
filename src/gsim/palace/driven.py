@@ -108,6 +108,9 @@ class DrivenSim(PalaceSimMixin, BaseModel):
         to_layer: str | None = None,
         length: float | None = None,
         impedance: float = 50.0,
+        resistance: float | None = None,
+        inductance: float | None = None,
+        capacitance: float | None = None,
         excited: bool = True,
         geometry: Literal["inplane", "via"] = "inplane",
     ) -> None:
@@ -120,6 +123,9 @@ class DrivenSim(PalaceSimMixin, BaseModel):
             to_layer: Top layer for via ports
             length: Port extent along direction (um)
             impedance: Port impedance (Ohms)
+            resistance: Series resistance (Ohms)
+            inductance: Series inductance (H)
+            capacitance: Shunt capacitance (F)
             excited: Whether this port is excited
             geometry: Port geometry type ("inplane" or "via")
 
@@ -140,6 +146,9 @@ class DrivenSim(PalaceSimMixin, BaseModel):
                 to_layer=to_layer,
                 length=length,
                 impedance=impedance,
+                resistance=resistance,
+                inductance=inductance,
+                capacitance=capacitance,
                 excited=excited,
                 geometry=geometry,
             )
@@ -153,6 +162,7 @@ class DrivenSim(PalaceSimMixin, BaseModel):
         s_width: float,
         gap_width: float,
         length: float,
+        offset: float = 0.0,
         impedance: float = 50.0,
         excited: bool = True,
     ) -> None:
@@ -170,6 +180,8 @@ class DrivenSim(PalaceSimMixin, BaseModel):
             s_width: Width of the signal (center) conductor (um)
             gap_width: Width of each gap between signal and ground (um)
             length: Port extent along direction (um)
+            offset: Shift the port inward along the waveguide (um).
+                Positive moves away from the boundary, into the conductor.
             impedance: Port impedance (Ohms)
             excited: Whether this port is excited
 
@@ -188,6 +200,7 @@ class DrivenSim(PalaceSimMixin, BaseModel):
                 s_width=s_width,
                 gap_width=gap_width,
                 length=length,
+                offset=offset,
                 impedance=impedance,
                 excited=excited,
             )
@@ -354,6 +367,14 @@ class DrivenSim(PalaceSimMixin, BaseModel):
                     excited=port_config.excited,
                 )
 
+            # Attach RLC values to port info for downstream consumers
+            if port_config.resistance is not None:
+                gf_port.info["resistance"] = port_config.resistance
+            if port_config.inductance is not None:
+                gf_port.info["inductance"] = port_config.inductance
+            if port_config.capacitance is not None:
+                gf_port.info["capacitance"] = port_config.capacitance
+
         # Configure CPW ports
         for cpw_config in self.cpw_ports:
             # Find the single gdsfactory port at the signal center
@@ -376,6 +397,7 @@ class DrivenSim(PalaceSimMixin, BaseModel):
                 length=cpw_config.length,
                 impedance=cpw_config.impedance,
                 excited=cpw_config.excited,
+                offset=cpw_config.offset,
             )
 
         self._configured_ports = True
@@ -406,11 +428,12 @@ class DrivenSim(PalaceSimMixin, BaseModel):
             max_mesh_size=mesh_config.max_mesh_size,
             cells_per_wavelength=mesh_config.cells_per_wavelength,
             margin=mesh_config.margin,
-            air_above=mesh_config.air_above,
+            airbox_margin=mesh_config.airbox_margin,
             fmax=effective_fmax,
             show_gui=mesh_config.show_gui,
             preview_only=mesh_config.preview_only,
             planar_conductors=mesh_config.planar_conductors,
+            refine_from_curves=mesh_config.refine_from_curves,
         )
 
         # Resolve stack
@@ -457,11 +480,11 @@ class DrivenSim(PalaceSimMixin, BaseModel):
     def preview(
         self,
         *,
-        preset: Literal["coarse", "default", "fine"] | None = None,
+        preset: Literal["coarse", "default", "graded", "fine"] | None = None,
         refined_mesh_size: float | None = None,
         max_mesh_size: float | None = None,
         margin: float | None = None,
-        air_above: float | None = None,
+        airbox_margin: float | None = None,
         fmax: float | None = None,
         planar_conductors: bool | None = None,
         show_gui: bool = True,
@@ -471,11 +494,11 @@ class DrivenSim(PalaceSimMixin, BaseModel):
         Opens the gmsh GUI to visualize the mesh interactively.
 
         Args:
-            preset: Mesh quality preset ("coarse", "default", "fine")
+            preset: Mesh quality preset ("coarse", "default", "graded", "fine")
             refined_mesh_size: Mesh size near conductors (um)
             max_mesh_size: Max mesh size in air/dielectric (um)
             margin: XY margin around design (um)
-            air_above: Air above top metal (um)
+            airbox_margin: Extra airbox around stack (um); 0 = disabled
             fmax: Max frequency for mesh sizing (Hz)
             planar_conductors: Treat conductors as 2D PEC surfaces
             show_gui: Show gmsh GUI for interactive preview
@@ -499,7 +522,7 @@ class DrivenSim(PalaceSimMixin, BaseModel):
             refined_mesh_size=refined_mesh_size,
             max_mesh_size=max_mesh_size,
             margin=margin,
-            air_above=air_above,
+            airbox_margin=airbox_margin,
             fmax=fmax,
             planar_conductors=planar_conductors,
             show_gui=show_gui,
@@ -517,11 +540,12 @@ class DrivenSim(PalaceSimMixin, BaseModel):
             max_mesh_size=mesh_config.max_mesh_size,
             cells_per_wavelength=mesh_config.cells_per_wavelength,
             margin=mesh_config.margin,
-            air_above=mesh_config.air_above,
+            airbox_margin=mesh_config.airbox_margin,
             fmax=mesh_config.fmax,
             show_gui=show_gui,
             preview_only=True,
             planar_conductors=mesh_config.planar_conductors,
+            refine_from_curves=mesh_config.refine_from_curves,
         )
 
         # Generate mesh in temp directory
@@ -541,11 +565,11 @@ class DrivenSim(PalaceSimMixin, BaseModel):
     def mesh(
         self,
         *,
-        preset: Literal["coarse", "default", "fine"] | None = None,
+        preset: Literal["coarse", "default", "graded", "fine"] | None = None,
         refined_mesh_size: float | None = None,
         max_mesh_size: float | None = None,
         margin: float | None = None,
-        air_above: float | None = None,
+        airbox_margin: float | None = None,
         fmax: float | None = None,
         planar_conductors: bool | None = None,
         show_gui: bool = False,
@@ -560,11 +584,11 @@ class DrivenSim(PalaceSimMixin, BaseModel):
         Requires set_output_dir() to be called first.
 
         Args:
-            preset: Mesh quality preset ("coarse", "default", "fine")
+            preset: Mesh quality preset ("coarse", "default", "graded", "fine")
             refined_mesh_size: Mesh size near conductors (um), overrides preset
             max_mesh_size: Max mesh size in air/dielectric (um), overrides preset
             margin: XY margin around design (um), overrides preset
-            air_above: Air above top metal (um), overrides preset
+            airbox_margin: Extra airbox around stack (um); 0 = disabled
             fmax: Max frequency for mesh sizing (Hz), overrides preset
             planar_conductors: Treat conductors as 2D PEC surfaces
             show_gui: Show gmsh GUI during meshing
@@ -595,7 +619,7 @@ class DrivenSim(PalaceSimMixin, BaseModel):
             refined_mesh_size=refined_mesh_size,
             max_mesh_size=max_mesh_size,
             margin=margin,
-            air_above=air_above,
+            airbox_margin=airbox_margin,
             fmax=fmax,
             planar_conductors=planar_conductors,
             show_gui=show_gui,
