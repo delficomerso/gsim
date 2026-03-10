@@ -6,9 +6,10 @@ DrivenSim, EigenmodeSim, ElectrostaticSim.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+from gsim.palace.models.results import ValidationResult
 
 if TYPE_CHECKING:
     from gdsfactory.component import Component
@@ -92,6 +93,7 @@ class PalaceSimMixin:
 
     def set_stack(
         self,
+        stack: LayerStack | None = None,
         *,
         yaml_path: str | Path | None = None,
         air_above: float = 200.0,
@@ -101,19 +103,37 @@ class PalaceSimMixin:
     ) -> None:
         """Configure the layer stack.
 
-        If yaml_path is provided, loads stack from YAML file.
-        Otherwise, extracts from active PDK with given parameters.
+        Three modes of use:
+
+        1. **Active PDK** (default — auto-detects IHP, QPDK, etc.)::
+
+               sim.set_stack(air_above=300.0, substrate_thickness=2.0)
+
+        2. **YAML file**::
+
+               sim.set_stack(yaml_path="custom_stack.yaml")
+
+        3. **Custom stack** (advanced — pass a hand-built LayerStack)::
+
+               sim.set_stack(my_layer_stack)
 
         Args:
-            yaml_path: Path to custom YAML stack file
-            air_above: Air box height above top metal in um
-            substrate_thickness: Thickness below z=0 in um
-            include_substrate: Include lossy silicon substrate
-            **kwargs: Additional args passed to extract_layer_stack
+            stack: Custom gsim LayerStack (bypasses PDK extraction).
+            yaml_path: Path to custom YAML stack file.
+            air_above: Air box height above top metal in um.
+            substrate_thickness: Thickness below z=0 in um.
+            include_substrate: Include lossy silicon substrate.
+            **kwargs: Additional args passed to extract_layer_stack.
 
         Example:
             >>> sim.set_stack(air_above=300.0, substrate_thickness=2.0)
         """
+        if stack is not None:
+            # Directly use a pre-built LayerStack — skip lazy resolution
+            self.stack = stack
+            self._stack_kwargs = {"_prebuilt": True}
+            return
+
         self._stack_kwargs = {
             "yaml_path": yaml_path,
             "air_above": air_above,
@@ -175,7 +195,7 @@ class PalaceSimMixin:
     def set_numerical(
         self,
         *,
-        order: int = 2,
+        order: int = 1,
         tolerance: float = 1e-6,
         max_iterations: int = 400,
         solver_type: Literal["Default", "SuperLU", "STRUMPACK", "MUMPS"] = "Default",
@@ -214,11 +234,18 @@ class PalaceSimMixin:
     # -------------------------------------------------------------------------
 
     def _resolve_stack(self) -> LayerStack:
-        """Resolve the layer stack from PDK or YAML.
+        """Resolve the layer stack from PDK, YAML, or custom object.
 
         Returns:
-            Legacy LayerStack object for mesh generation
+            LayerStack object for mesh generation
         """
+        # If a custom stack was given via set_stack(layer_stack), use it
+        if self.stack is not None and self._stack_kwargs.get("_prebuilt"):
+            # Apply material overrides
+            for name, props in self.materials.items():
+                self.stack.materials[name] = props.to_dict()
+            return self.stack
+
         from gsim.common.stack import get_stack
 
         yaml_path = self._stack_kwargs.pop("yaml_path", None)
@@ -238,11 +265,11 @@ class PalaceSimMixin:
 
     def _build_mesh_config(
         self,
-        preset: Literal["coarse", "default", "fine"] | None,
+        preset: Literal["coarse", "default", "graded", "fine"] | None,
         refined_mesh_size: float | None,
         max_mesh_size: float | None,
         margin: float | None,
-        air_above: float | None,
+        airbox_margin: float | None,
         fmax: float | None,
         planar_conductors: bool | None,
         show_gui: bool,
@@ -253,6 +280,8 @@ class PalaceSimMixin:
         # Build mesh config from preset
         if preset == "coarse":
             mesh_config = MeshConfig.coarse()
+        elif preset == "graded":
+            mesh_config = MeshConfig.graded()
         elif preset == "fine":
             mesh_config = MeshConfig.fine()
         else:
@@ -267,28 +296,6 @@ class PalaceSimMixin:
         else:
             mesh_config.planar_conductors = planar_conductors
 
-        # Track overrides for warning
-        overrides = []
-        if preset is not None:
-            if refined_mesh_size is not None:
-                overrides.append(f"refined_mesh_size={refined_mesh_size}")
-            if max_mesh_size is not None:
-                overrides.append(f"max_mesh_size={max_mesh_size}")
-            if margin is not None:
-                overrides.append(f"margin={margin}")
-            if air_above is not None:
-                overrides.append(f"air_above={air_above}")
-            if fmax is not None:
-                overrides.append(f"fmax={fmax}")
-            if planar_conductors is not None:
-                overrides.append(f"planar_conductors={planar_conductors}")
-
-            if overrides:
-                warnings.warn(
-                    f"Preset '{preset}' values overridden by: {', '.join(overrides)}",
-                    stacklevel=4,
-                )
-
         # Apply overrides
         if refined_mesh_size is not None:
             mesh_config.refined_mesh_size = refined_mesh_size
@@ -296,13 +303,113 @@ class PalaceSimMixin:
             mesh_config.max_mesh_size = max_mesh_size
         if margin is not None:
             mesh_config.margin = margin
-        if air_above is not None:
-            mesh_config.air_above = air_above
+        if airbox_margin is not None:
+            mesh_config.airbox_margin = airbox_margin
         if fmax is not None:
             mesh_config.fmax = fmax
         mesh_config.show_gui = show_gui
 
         return mesh_config
+
+    # -------------------------------------------------------------------------
+    # Post-mesh validation
+    # -------------------------------------------------------------------------
+
+    def validate_mesh(self) -> ValidationResult:
+        """Validate the generated mesh and config before cloud submission.
+
+        Checks that physical groups are correctly assigned after meshing:
+        conductor surfaces, dielectric volumes, ports, and absorbing boundary.
+        Also verifies the generated config.json structure.
+
+        Call after mesh() and before run().
+
+        Returns:
+            ValidationResult with validation status and messages
+
+        Example:
+            >>> sim.mesh(preset="coarse")
+            >>> result = sim.validate_mesh()
+            >>> print(result)
+        """
+        errors = []
+        warnings_list = []
+
+        mesh_result = getattr(self, "_mesh_result", None) or getattr(
+            self, "_last_mesh_result", None
+        )
+        if mesh_result is None:
+            errors.append("No mesh generated. Call mesh() first.")
+            return ValidationResult(valid=False, errors=errors, warnings=warnings_list)
+
+        groups = mesh_result.groups
+
+        # Check dielectric volumes
+        if not groups.get("volumes"):
+            errors.append("No dielectric volumes in mesh.")
+        else:
+            vol_names = list(groups["volumes"].keys())
+            warnings_list.append(f"Volumes: {vol_names}")
+
+        # Check conductor surfaces (volumetric or PEC)
+        has_conductors = bool(groups.get("conductor_surfaces"))
+        has_pec = bool(groups.get("pec_surfaces"))
+        if not has_conductors and not has_pec:
+            errors.append(
+                "No conductor surfaces in mesh. "
+                "Check that conductor layers have polygons and correct layer_type."
+            )
+        else:
+            if has_conductors:
+                warnings_list.append(
+                    f"Conductor surfaces: {list(groups['conductor_surfaces'].keys())}"
+                )
+            if has_pec:
+                warnings_list.append(
+                    f"PEC surfaces: {list(groups['pec_surfaces'].keys())}"
+                )
+
+        # Check ports
+        port_surfaces = groups.get("port_surfaces", {})
+        if not port_surfaces:
+            errors.append("No port surfaces in mesh.")
+        else:
+            for port_name, port_info in port_surfaces.items():
+                if port_info.get("type") == "cpw":
+                    n_elems = len(port_info.get("elements", []))
+                    if n_elems < 2:
+                        errors.append(
+                            f"CPW port '{port_name}' has {n_elems} elements "
+                            f"(expected >= 2)."
+                        )
+
+        # Check absorbing boundary
+        if not groups.get("boundary_surfaces", {}).get("absorbing"):
+            warnings_list.append(
+                "No absorbing boundary found. This is expected if airbox_margin=0."
+            )
+
+        # Validate config.json if it exists
+        output_dir = getattr(self, "_output_dir", None)
+        if output_dir is not None:
+            import json
+
+            config_path = output_dir / "config.json"
+            if config_path.exists():
+                try:
+                    config = json.loads(config_path.read_text())
+                    boundaries = config.get("Boundaries", {})
+                    if not boundaries.get("Conductivity") and not boundaries.get("PEC"):
+                        errors.append(
+                            "config.json has no Conductivity or PEC boundaries."
+                        )
+                    if not boundaries.get("LumpedPort"):
+                        errors.append("config.json has no LumpedPort entries.")
+                except json.JSONDecodeError as e:
+                    errors.append(f"config.json is invalid JSON: {e}")
+
+        valid = len(errors) == 0
+        return ValidationResult(valid=valid, errors=errors, warnings=warnings_list)
 
     # -------------------------------------------------------------------------
     # Convenience methods
@@ -345,8 +452,10 @@ class PalaceSimMixin:
         output: str | Path | None = None,
         show_groups: list[str] | None = None,
         interactive: bool = True,
+        style: Literal["wireframe", "solid"] = "wireframe",
+        transparent_groups: list[str] | None = None,
     ) -> None:
-        """Plot the mesh wireframe using PyVista.
+        """Plot the mesh using PyVista.
 
         Requires mesh() to be called first.
 
@@ -356,6 +465,10 @@ class PalaceSimMixin:
                 Example: ["metal", "P"] to show metal layers and ports.
             interactive: If True, open interactive 3D viewer.
                 If False, save static PNG to output path.
+            style: ``"wireframe"`` (edges only) or ``"solid"`` (coloured
+                surfaces per physical group).
+            transparent_groups: Group names rendered at low opacity in
+                *solid* mode.  Ignored in *wireframe* mode.
 
         Raises:
             ValueError: If output_dir not set or mesh file doesn't exist
@@ -363,6 +476,7 @@ class PalaceSimMixin:
         Example:
             >>> sim.mesh(preset="default")
             >>> sim.plot_mesh(show_groups=["metal", "P"])
+            >>> sim.plot_mesh(style="solid", transparent_groups=["Absorbing_boundary"])
         """
         from gsim.viz import plot_mesh as _plot_mesh
 
@@ -382,4 +496,6 @@ class PalaceSimMixin:
             output=output,
             show_groups=show_groups,
             interactive=interactive,
+            style=style,
+            transparent_groups=transparent_groups,
         )
