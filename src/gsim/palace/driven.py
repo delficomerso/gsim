@@ -161,7 +161,7 @@ class DrivenSim(PalaceSimMixin, BaseModel):
         layer: str,
         s_width: float,
         gap_width: float,
-        length: float,
+        length: float = 0.1,
         offset: float = 0.0,
         impedance: float = 50.0,
         excited: bool = True,
@@ -173,6 +173,13 @@ class DrivenSim(PalaceSimMixin, BaseModel):
 
         Place a single gdsfactory port at the center of the signal conductor.
         The two gap element surfaces are computed from s_width and gap_width.
+
+        Lumped ports assume a uniform E-field across the port surface. For CPW
+        gaps, larger port lengths increase the mismatch between this uniform
+        assumption and the actual concentrated field at gap edges, introducing
+        spurious insertion loss. Reducing the port length minimizes this
+        mismatch. The result converges for length ≤ 0.1 µm and is
+        mesh-independent (verified across coarse, default, and fine presets).
 
         Args:
             name: Port name (must match a component port at the signal center)
