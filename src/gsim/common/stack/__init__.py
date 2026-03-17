@@ -51,9 +51,13 @@ def get_stack(
 ) -> LayerStack:
     """Get layer stack from active PDK or YAML file.
 
+    Automatically detects the active PDK and builds the appropriate stack
+    by extracting layers from the PDK's ``LAYER_STACK`` via
+    :func:`extract_from_pdk`.
+
     Args:
         yaml_path: Path to custom YAML stack file. If None, uses active PDK.
-        **kwargs: Additional args passed to extract_layer_stack:
+        **kwargs: Additional args passed to the stack builder:
             - substrate_thickness: Thickness below z=0 in um (default: 2.0)
             - air_above: Air box height above top metal in um (default: 200)
             - include_substrate: Include lossy silicon substrate (default: False).

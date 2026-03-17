@@ -101,12 +101,25 @@ def generate_palace_config(
             mat_entry["Permittivity"] = 1.0
             mat_entry["LossTan"] = 0.0
         else:
-            mat_entry["Permittivity"] = mat_props.get("permittivity", 1.0)
+            # Use anisotropic tensor values when available
+            if "permittivity_diagonal" in mat_props:
+                mat_entry["Permittivity"] = mat_props["permittivity_diagonal"]
+            else:
+                mat_entry["Permittivity"] = mat_props.get("permittivity", 1.0)
+
+            if "permeability" in mat_props:
+                mat_entry["Permeability"] = mat_props["permeability"]
+
             sigma = mat_props.get("conductivity", 0.0)
             if sigma > 0:
                 mat_entry["Conductivity"] = sigma
+            elif "loss_tangent_diagonal" in mat_props:
+                mat_entry["LossTan"] = mat_props["loss_tangent_diagonal"]
             else:
                 mat_entry["LossTan"] = mat_props.get("loss_tangent", 0.0)
+
+            if "material_axes" in mat_props:
+                mat_entry["MaterialAxes"] = mat_props["material_axes"]
 
         materials.append(mat_entry)
 
@@ -168,15 +181,20 @@ def generate_palace_config(
                 direction = (
                     "Z" if port.geometry == PortGeometry.VIA else port.direction.upper()
                 )
-                lumped_ports.append(
-                    {
-                        "Index": port_idx,
-                        "R": port.impedance,
-                        "Direction": direction,
-                        "Excitation": port_idx if port.excited else False,
-                        "Attributes": [port_group["phys_group"]],
-                    }
-                )
+                port_entry: dict[str, object] = {
+                    "Index": port_idx,
+                    "R": port.impedance,
+                    "Direction": direction,
+                    "Excitation": port_idx if port.excited else False,
+                    "Attributes": [port_group["phys_group"]],
+                }
+                if port.resistance is not None:
+                    port_entry["Rs"] = port.resistance
+                if port.inductance is not None:
+                    port_entry["L"] = port.inductance
+                if port.capacitance is not None:
+                    port_entry["C"] = port.capacitance
+                lumped_ports.append(port_entry)
         port_idx += 1
 
     boundaries: dict[str, object] = {
@@ -189,8 +207,11 @@ def generate_palace_config(
         boundaries["PEC"] = {"Attributes": pec_attrs}
 
     if "absorbing" in groups["boundary_surfaces"]:
+        absorbing_pg = groups["boundary_surfaces"]["absorbing"]["phys_group"]
+        # phys_group may be a list (multiple __None groups) or a single int
+        attrs = absorbing_pg if isinstance(absorbing_pg, list) else [absorbing_pg]
         boundaries["Absorbing"] = {
-            "Attributes": [groups["boundary_surfaces"]["absorbing"]["phys_group"]],
+            "Attributes": attrs,
             "Order": 2,
         }
 

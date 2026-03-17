@@ -39,6 +39,13 @@ class PortConfig(BaseModel):
     to_layer: str | None = None
     length: float | None = Field(default=None, gt=0)
     impedance: float = Field(default=50.0, gt=0)
+    resistance: float | None = Field(
+        default=None, ge=0, description="Resistance in Ohms"
+    )
+    inductance: float | None = Field(default=None, ge=0, description="Inductance in H")
+    capacitance: float | None = Field(
+        default=None, ge=0, description="Capacitance in F"
+    )
     excited: bool = True
     geometry: Literal["inplane", "via"] = "inplane"
 
@@ -69,6 +76,8 @@ class CPWPortConfig(BaseModel):
         s_width: Width of the signal (center) conductor (um)
         gap_width: Width of each gap between signal and ground (um)
         length: Port extent along direction (um)
+        offset: Shift the port along the waveguide direction (um).
+            Positive moves in the port orientation direction.
         impedance: Port impedance (Ohms)
         excited: Whether this port is excited
     """
@@ -82,6 +91,11 @@ class CPWPortConfig(BaseModel):
         gt=0, description="Gap width between signal and ground (um)"
     )
     length: float = Field(gt=0, description="Port extent in um")
+    offset: float = Field(
+        default=0.0,
+        description="Shift port inward along the waveguide (um). "
+        "Positive = away from boundary, into conductor.",
+    )
     impedance: float = Field(default=50.0, gt=0)
     excited: bool = True
 

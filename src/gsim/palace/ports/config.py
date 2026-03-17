@@ -62,6 +62,9 @@ class PalacePort:
 
     # Electrical properties
     impedance: float = 50.0  # Ohms
+    resistance: float | None = None  # Ohms
+    inductance: float | None = None  # H
+    capacitance: float | None = None  # F
     excited: bool = True  # Whether this port is excited (vs just measured)
 
     @property
@@ -160,6 +163,7 @@ def configure_cpw_port(
     length: float,
     impedance: float = 50.0,
     excited: bool = True,
+    offset: float = 0.0,
 ):
     """Configure a gdsfactory port as a CPW (multi-element) lumped port.
 
@@ -175,6 +179,8 @@ def configure_cpw_port(
         length: Port extent along direction (um)
         impedance: Port impedance in Ohms (default: 50)
         excited: Whether port is excited (default: True)
+        offset: Shift port inward along the waveguide (um).
+            Positive moves away from the boundary, into the conductor.
 
     Examples:
         ```python
@@ -194,15 +200,25 @@ def configure_cpw_port(
         float(port.orientation) if port.orientation is not None else 0.0
     )
 
+    # Longitudinal direction (along waveguide / port orientation)
+    # Port orientation points *outward* from the component, so we
+    # negate it: positive offset moves the port *inward* along the
+    # waveguide (away from the boundary, into the conductor).
+    longitudinal = np.array([np.cos(orientation_rad), np.sin(orientation_rad)])
+
+    # Apply longitudinal offset if requested
+    if offset != 0.0:
+        center = center - longitudinal * offset
+
     # Transverse direction (perpendicular to port orientation, in-plane)
     # Port orientation points along the waveguide; transverse is 90° CCW
     transverse = np.array([-np.sin(orientation_rad), np.cos(orientation_rad)])
 
     # Gap center offset from signal center
-    offset = (s_width + gap_width) / 2.0
+    gap_offset = (s_width + gap_width) / 2.0
 
-    upper_center = center + transverse * offset
-    lower_center = center - transverse * offset
+    upper_center = center + transverse * gap_offset
+    lower_center = center - transverse * gap_offset
 
     # Store computed CPW element info on the single port
     port.info["palace_type"] = "cpw"
@@ -328,6 +344,9 @@ def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
             to_layer=to_layer,
             length=info.get("length"),
             impedance=info.get("impedance", 50.0),
+            resistance=info.get("resistance"),
+            inductance=info.get("inductance"),
+            capacitance=info.get("capacitance"),
             excited=info.get("excited", True),
         )
         palace_ports.append(palace_port)

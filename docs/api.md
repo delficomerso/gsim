@@ -28,7 +28,13 @@
 
 ### Functions
 
+::: gsim.common.decimate
+
 ::: gsim.common.extract_geometry_model
+
+::: gsim.common.klayout_to_shapely
+
+::: gsim.common.shapely_to_klayout
 
 ---
 

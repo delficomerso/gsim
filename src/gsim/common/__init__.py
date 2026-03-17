@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from gsim.common.geometry import Geometry
 from gsim.common.geometry_model import GeometryModel, Prism, extract_geometry_model
+from gsim.common.polygon_utils import decimate, klayout_to_shapely, shapely_to_klayout
 from gsim.common.stack import Layer, LayerStack, ValidationResult
 
 # Alias for backward compatibility
@@ -25,5 +26,8 @@ __all__ = [
     "Prism",
     "Stack",
     "ValidationResult",
+    "decimate",
     "extract_geometry_model",
+    "klayout_to_shapely",
+    "shapely_to_klayout",
 ]
