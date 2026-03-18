@@ -269,9 +269,28 @@ def extract_ports(component, stack: LayerStack) -> list[PalacePort]:
                 (float(upper_center[0]), float(upper_center[1])),
                 (float(lower_center[0]), float(lower_center[1])),
             ]
-            # Upper element: E-field toward signal (negative transverse)
-            # Lower element: E-field toward signal (positive transverse)
-            directions = ["-Y", "+Y"]
+
+            # Compute E-field directions from port orientation.
+            # transverse = 90° CCW from the longitudinal direction = [-sin, cos]
+            # upper_center = signal_center + transverse * gap_offset
+            #   → E-field in upper gap points toward signal: -transverse direction
+            # lower_center = signal_center - transverse * gap_offset
+            #   → E-field in lower gap points toward signal: +transverse direction
+            import numpy as np
+
+            orientation_rad = np.deg2rad(
+                float(port.orientation) if port.orientation is not None else 0.0
+            )
+            transverse = np.array(
+                [-np.sin(orientation_rad), np.cos(orientation_rad)]
+            )
+
+            def _vec_to_dir(v) -> str:
+                if abs(v[0]) >= abs(v[1]):
+                    return "+X" if v[0] > 0 else "-X"
+                return "+Y" if v[1] > 0 else "-Y"
+
+            directions = [_vec_to_dir(-transverse), _vec_to_dir(transverse)]
 
             cpw_port = PalacePort(
                 name=port.name,
