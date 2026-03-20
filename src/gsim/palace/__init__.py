@@ -104,12 +104,8 @@ from gsim.palace.ports import (
 # Visualization
 from gsim.viz import plot_mesh
 
-# PEC block constant
-PEC_LAYER: tuple[int, int] = (65000, 0)
-
 __all__ = [
     "MATERIALS_DB",
-    "PEC_LAYER",
     "CPWPortConfig",
     "DrivenConfig",
     "DrivenSim",

@@ -407,7 +407,7 @@ def pec_block_sim(tmp_path_factory):
     sim.set_stack(substrate_thickness=2.0, air_above=300.0)
     sim.add_cpw_port("o1", layer="topmetal2", s_width=20, gap_width=15, length=5.0)
     sim.add_cpw_port("o2", layer="topmetal2", s_width=20, gap_width=15, length=5.0)
-    sim.add_pec(from_layer="metal1", to_layer="topmetal2")
+    sim.add_pec(gds_layer=PEC_LAYER, from_layer="metal1", to_layer="topmetal2")
     sim.set_driven(fmin=1e9, fmax=100e9, num_points=40)
     sim.mesh(preset="coarse")
     return sim

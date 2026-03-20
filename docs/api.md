@@ -162,8 +162,6 @@
 
 ::: gsim.palace.MATERIALS_DB
 
-::: gsim.palace.PEC_LAYER
-
 ---
 
 ## gsim.meep

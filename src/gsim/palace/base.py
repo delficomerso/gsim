@@ -196,7 +196,7 @@ class PalaceSimMixin:
     def add_pec(
         self,
         *,
-        gds_layer: tuple[int, int] = (65000, 0),
+        gds_layer: tuple[int, int],
         from_layer: str,
         to_layer: str,
     ) -> None:
@@ -213,7 +213,9 @@ class PalaceSimMixin:
             to_layer: Stack layer name — extrusion ends at this layer's zmax.
 
         Example:
-            >>> sim.add_pec(from_layer="metal1", to_layer="topmetal2")
+            >>> sim.add_pec(
+            ...     gds_layer=(65000, 0), from_layer="metal1", to_layer="topmetal2"
+            ... )
         """
         from gsim.palace.models.pec import PECBlockConfig
 

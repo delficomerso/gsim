@@ -164,17 +164,12 @@ class TestAddPec:
         """add_pec() stores PECBlockConfig on all 3 sim classes."""
         for cls in [DrivenSim, EigenmodeSim, ElectrostaticSim]:
             sim = cls()
-            sim.add_pec(from_layer="metal1", to_layer="topmetal2")
+            sim.add_pec(gds_layer=(65000, 0), from_layer="metal1", to_layer="topmetal2")
             assert len(sim._pec_blocks) == 1
             cfg = sim._pec_blocks[0]
             assert cfg.from_layer == "metal1"
             assert cfg.to_layer == "topmetal2"
-
-    def test_add_pec_default_gds_layer(self):
-        """Default gds_layer is (65000, 0)."""
-        sim = DrivenSim()
-        sim.add_pec(from_layer="metal1", to_layer="topmetal2")
-        assert sim._pec_blocks[0].gds_layer == (65000, 0)
+            assert cfg.gds_layer == (65000, 0)
 
     def test_add_pec_custom_gds_layer(self):
         """Custom gds_layer is respected."""
@@ -185,8 +180,8 @@ class TestAddPec:
     def test_add_pec_accumulates(self):
         """Multiple add_pec() calls accumulate."""
         sim = DrivenSim()
-        sim.add_pec(from_layer="metal1", to_layer="topmetal2")
-        sim.add_pec(from_layer="metal2", to_layer="topmetal2")
+        sim.add_pec(gds_layer=(65000, 0), from_layer="metal1", to_layer="topmetal2")
+        sim.add_pec(gds_layer=(65000, 0), from_layer="metal2", to_layer="topmetal2")
         assert len(sim._pec_blocks) == 2
         assert sim._pec_blocks[0].from_layer == "metal1"
         assert sim._pec_blocks[1].from_layer == "metal2"

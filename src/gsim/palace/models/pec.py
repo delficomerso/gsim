@@ -21,6 +21,6 @@ class PECBlockConfig(BaseModel):
 
     model_config = ConfigDict(validate_assignment=True)
 
-    gds_layer: tuple[int, int] = (65000, 0)
+    gds_layer: tuple[int, int]
     from_layer: str
     to_layer: str
