@@ -1,8 +1,4 @@
-"""Mesh generator for Palace EM simulation.
-
-This module generates meshes directly from palace-api data structures,
-replacing the gds2palace backend with a cleaner implementation.
-"""
+"""Mesh generator for Palace EM simulation."""
 
 from __future__ import annotations
 

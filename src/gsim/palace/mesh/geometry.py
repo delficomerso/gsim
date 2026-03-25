@@ -163,7 +163,9 @@ def _merge_via_polygons(
     if len(polys) <= 1 or merge_distance <= 0:
         return polys
 
-    offset = merge_distance / 2 + 0.01
+    # Small epsilon ensures vias exactly at merge_distance still overlap after buffering
+    _MERGE_EPSILON = 0.01  # um
+    offset = merge_distance / 2 + _MERGE_EPSILON
 
     shapely_polys = []
     for pts_x, pts_y, _holes in polys:
@@ -315,10 +317,10 @@ def add_metals(
     # Record bounding boxes of via volumes BEFORE removeAllDuplicates
     # so we can re-identify them after tags get renumbered.
     _via_bboxes: dict[str, list[tuple[float, ...]]] = {}
+    kernel.synchronize()
     for layer_name, tag_info in metal_tags.items():
         for vtag in tag_info["volumes"]:
             if isinstance(vtag, int):
-                kernel.synchronize()
                 bbox = kernel.getBoundingBox(3, vtag)
                 _via_bboxes.setdefault(layer_name, []).append(bbox)
 
@@ -333,7 +335,8 @@ def add_metals(
             for _, vtag in all_vols:
                 try:
                     bbox = kernel.getBoundingBox(3, vtag)
-                except Exception:  # noqa: S112
+                except Exception:
+                    logger.debug("Could not get bbox for volume %d, skipping", vtag)
                     continue
                 if all(
                     abs(a - b) < 0.01 for a, b in zip(bbox, target_bbox, strict=True)
@@ -348,6 +351,11 @@ def add_metals(
     for layer_name, vol_tags in _conductor_volumes.items():
         for volumetag in vol_tags:
             if volumetag not in current_vols:
+                logger.warning(
+                    "Conductor volume %d on %s invalidated by dedup",
+                    volumetag,
+                    layer_name,
+                )
                 continue
             _, surfaceloops = kernel.getSurfaceLoops(volumetag)
             if surfaceloops:

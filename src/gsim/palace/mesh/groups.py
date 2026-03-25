@@ -38,7 +38,7 @@ def assign_physical_groups(
         port_info: Port metadata including type info
         entities: Entity list used in run_boolean_pipeline
         pg_map: name → physical-group tag returned by run_boolean_pipeline
-        _stack: Layer stack (reserved for future use)
+        _stack: Layer stack used to identify via layers
 
     Returns:
         Dict with the same schema as before::

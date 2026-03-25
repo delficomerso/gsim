@@ -1,8 +1,4 @@
-"""Gmsh utility functions for Palace mesh generation.
-
-Extracted from gds2palace/util_simulation_setup.py and adapted
-to work directly with palace-api data structures.
-"""
+"""Gmsh utility functions for Palace mesh generation."""
 
 from __future__ import annotations
 
