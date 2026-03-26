@@ -148,11 +148,27 @@ class SParams:
             cols[f"S_{to_p}_{from_p}_deg"] = sp.deg
         return pd.DataFrame(cols)
 
-    def plot(self, *, figsize: tuple[float, float] = (8, 6)) -> None:
-        """Plot magnitude and phase of all S-parameters."""
+    def plot(
+        self,
+        *,
+        full: bool = False,
+        figsize: tuple[float, float] = (8, 6),
+    ) -> None:
+        """Plot magnitude and phase of S-parameters.
+
+        By default only the first excitation column is plotted
+        (e.g. S11, S21 but not S12, S22). Pass ``full=True`` to
+        include all entries.
+        """
+        # Find unique "from" ports (excitation columns)
+        from_ports = list(dict.fromkeys(fp for _, fp in self._data))
+        first_from = from_ports[0] if from_ports else None
+
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize)
 
         for (to_p, from_p), sp in self._data.items():
+            if not full and len(from_ports) > 1 and from_p != first_from:
+                continue
             label = f"S({to_p},{from_p})"
             ax1.plot(self._freq, sp.db, label=label)
             ax2.plot(self._freq, sp.deg, label=label)
